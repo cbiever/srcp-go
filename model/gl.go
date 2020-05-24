@@ -1,4 +1,4 @@
-package main
+package model
 
 type GL struct {
 	Name                     string  `json:"name" yaml:"name"`
