@@ -4,32 +4,11 @@ import (
 	"fmt"
 	"log"
 	"net"
+	. "srcpd-go/command"
+	. "srcpd-go/connector"
 	"sync"
 	"time"
 )
-
-type InfoType int
-
-const (
-	Get = iota + 100
-	Init
-	Term
-)
-
-type GLInfo struct {
-	infoType InfoType
-	bus      int
-	address  int
-}
-
-type SubscribeInfo struct {
-	sessionID   int
-	infoChannel chan interface{}
-}
-
-type UnsubscribeInfo struct {
-	sessionID int
-}
 
 var subscriptions sync.Map
 
@@ -41,9 +20,12 @@ func runTcpServer(port int) {
 	defer serverSocket.Close()
 
 	subscriptionChannel := make(chan interface{})
-	commandChannel := make(chan interface{})
 
 	go handleRegisterListener(subscriptionChannel)
+
+	commandChannel := make(chan Command)
+
+	go handleCommand(commandChannel)
 
 	go broadcast()
 
@@ -56,15 +38,15 @@ func runTcpServer(port int) {
 	}
 }
 
-func handleRegisterListener(subscriptionChannnel chan interface{}) {
+func handleRegisterListener(subscriptionChannel chan interface{}) {
 	for {
-		switch request := (<-subscriptionChannnel).(type) {
+		switch request := (<-subscriptionChannel).(type) {
 		case SubscribeInfo:
-			subscriptions.Store(request.sessionID, request.infoChannel)
-			log.Printf("Subscription added for session %d", request.sessionID)
+			subscriptions.Store(request.SessionID, request.InfoChannel)
+			log.Printf("Subscription added for session %d", request.SessionID)
 		case UnsubscribeInfo:
-			subscriptions.Delete(request.sessionID)
-			log.Printf("Subscription removed for session %d", request.sessionID)
+			subscriptions.Delete(request.SessionID)
+			log.Printf("Subscription removed for session %d", request.SessionID)
 		}
 	}
 }
@@ -78,5 +60,13 @@ func broadcast() {
 			subscriptor <- GLInfo{Init, 1, 123}
 			return true
 		})
+	}
+}
+
+func handleCommand(commandChannel chan Command) {
+	for {
+		command := <-commandChannel
+		log.Printf("command: %v", command)
+		command.ReplyChannel <- Reply{"ladida"}
 	}
 }

@@ -1,12 +1,15 @@
-package main
+package connector
 
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"regexp"
+	. "srcpd-go/command"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -22,15 +25,16 @@ const (
 type ConnectionMode int
 
 const (
-	Command = iota
+	Command_ = iota // _ due to conflict with Command type
 	Info
 )
 
 type TcpConnector struct {
 	connection            net.Conn
-	sessionID             int
+	sessionID             uint32
 	subscriptionChannel   chan interface{}
-	commandChannel        chan interface{}
+	commandChannel        chan Command
+	replyChannel          chan Reply
 	infoChannel           chan interface{}
 	protocolVersionRegexp *regexp.Regexp
 	connectionModeRegexp  *regexp.Regexp
@@ -39,17 +43,16 @@ type TcpConnector struct {
 	commandTranslator     *CommandTranslator
 }
 
-var sessionID = 1
-
-func NewTcpConnector(connection net.Conn, subscriptionChannel chan interface{}, commandChannel chan interface{}) *TcpConnector {
+func NewTcpConnector(connection net.Conn, subscriptionChannel chan interface{}, commandChannel chan Command) *TcpConnector {
 	tcpConnector := new(TcpConnector)
 	tcpConnector.connection = connection
 	tcpConnector.subscriptionChannel = subscriptionChannel
 	tcpConnector.commandChannel = commandChannel
+	tcpConnector.replyChannel = make(chan Reply)
 	tcpConnector.protocolVersionRegexp = regexp.MustCompile("SET PROTOCOL SRCP (\\d\\.\\d\\.\\d)")
 	tcpConnector.connectionModeRegexp = regexp.MustCompile("SET CONNECTIONMODE SRCP (INFO|COMMAND|.*)")
 	tcpConnector.connectionStatus = Handshake
-	tcpConnector.connectionMode = Command
+	tcpConnector.connectionMode = Command_
 	return tcpConnector
 }
 
@@ -71,7 +74,15 @@ func (tcpConnector *TcpConnector) handleConnection() {
 	for {
 		data, err := reader.ReadString('\n')
 		if err != nil {
-			log.Println("An error occured while reading socket", err)
+			if err == io.EOF {
+				if tcpConnector.sessionID > 0 {
+					log.Printf("Socket closed by peer for session %d", tcpConnector.sessionID)
+				} else {
+					log.Println("Socket closed by peer")
+				}
+			} else {
+				log.Println("An error occurred while reading socket", err)
+			}
 			return
 		}
 		data = strings.TrimSpace(data)
@@ -94,11 +105,11 @@ func (tcpConnector *TcpConnector) handleConnection() {
 				handled = true
 			}
 
-			commandMode := tcpConnector.connectionModeRegexp.FindStringSubmatch(data)
-			if len(commandMode) == 2 {
-				switch commandMode[1] {
+			connectionMode := tcpConnector.connectionModeRegexp.FindStringSubmatch(data)
+			if len(connectionMode) == 2 {
+				switch connectionMode[1] {
 				case "COMMAND":
-					tcpConnector.connectionMode = Command
+					tcpConnector.connectionMode = Command_
 					if tcpConnector.sendReply(writer, "202 OK CONNECTIONMODE") != nil {
 						return
 					}
@@ -119,10 +130,9 @@ func (tcpConnector *TcpConnector) handleConnection() {
 				if tcpConnector.sendReply(writer, fmt.Sprintf("200 OK GO %d", sessionID)) != nil {
 					return
 				}
-				tcpConnector.sessionID = sessionID
-				sessionID++
+				tcpConnector.sessionID = atomic.AddUint32(&sessionID, 1)
 				switch tcpConnector.connectionMode {
-				case Command:
+				case Command_:
 					tcpConnector.connectionStatus = CommandMode
 					tcpConnector.commandTranslator = NewCommandTranslator()
 				case Info:
@@ -130,17 +140,16 @@ func (tcpConnector *TcpConnector) handleConnection() {
 					tcpConnector.infoChannel = make(chan interface{})
 					tcpConnector.subscriptionChannel <- SubscribeInfo{tcpConnector.sessionID, tcpConnector.infoChannel}
 					go func() {
-						writer := bufio.NewWriter(tcpConnector.connection)
 						for {
 							switch info := (<-tcpConnector.infoChannel).(type) {
 							case GLInfo:
-								switch info.infoType {
+								switch info.InfoType {
 								case Get:
-									writer.WriteString(fmt.Sprintf("100 %d %d\n", info.bus, info.address))
+									writer.WriteString(fmt.Sprintf("100 %d %d\n", info.Bus, info.Address))
 								case Init:
-									writer.WriteString(fmt.Sprintf("101 %d %d\n", info.bus, info.address))
+									writer.WriteString(fmt.Sprintf("101 %d %d\n", info.Bus, info.Address))
 								case Term:
-									writer.WriteString(fmt.Sprintf("102 %d %d\n", info.bus, info.address))
+									writer.WriteString(fmt.Sprintf("102 %d %d\n", info.Bus, info.Address))
 								}
 							}
 							writer.Flush()
@@ -159,10 +168,9 @@ func (tcpConnector *TcpConnector) handleConnection() {
 			command := tcpConnector.commandTranslator.Translate(data)
 			switch command.(type) {
 			default:
-				if tcpConnector.sendReply(writer, "200 OK") != nil {
-					return
-				}
-				tcpConnector.commandChannel <- command
+				tcpConnector.commandChannel <- Command{command, tcpConnector.replyChannel}
+				reply := <-tcpConnector.replyChannel
+				tcpConnector.sendReply(writer, reply.Message)
 			case UnrecognizedCommand:
 				if tcpConnector.sendReply(writer, "410 ERROR unknown command") != nil {
 					return

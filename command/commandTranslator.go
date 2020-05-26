@@ -1,9 +1,9 @@
-package main
+package command
 
 import (
 	"fmt"
 	"regexp"
-	"srcpd-go/model"
+	. "srcpd-go/model"
 	"strconv"
 	"strings"
 )
@@ -13,25 +13,6 @@ type CommandTranslator struct {
 	getGLRegexp  *regexp.Regexp
 	setGLRegexp  *regexp.Regexp
 	termGLRegexp *regexp.Regexp
-}
-
-type UnrecognizedCommand struct {
-}
-
-type InitGLCommand struct {
-	gl model.GL
-}
-
-type GetGLCommand struct {
-	gl model.GL
-}
-
-type SetGLCommand struct {
-	gl model.GL
-}
-
-type TermGLCommand struct {
-	gl model.GL
 }
 
 func NewCommandTranslator() *CommandTranslator {
@@ -47,7 +28,7 @@ func (commandTranslator *CommandTranslator) Translate(data string) interface{} {
 	initGL := commandTranslator.initGLRegexp.FindStringSubmatch(data)
 
 	if len(initGL) > 3 {
-		gl := model.GL{}
+		gl := GL{}
 		gl.Name = fmt.Sprintf("GL-%s-%s", initGL[1], initGL[2])
 		gl.Bus, _ = strconv.Atoi(initGL[1])
 		gl.Address, _ = strconv.Atoi(initGL[2])
@@ -68,7 +49,7 @@ func (commandTranslator *CommandTranslator) Translate(data string) interface{} {
 	getGL := commandTranslator.getGLRegexp.FindStringSubmatch(data)
 
 	if len(getGL) == 3 {
-		gl := model.GL{}
+		gl := GL{}
 		gl.Bus, _ = strconv.Atoi(getGL[1])
 		gl.Address, _ = strconv.Atoi(getGL[2])
 		return GetGLCommand{gl}
@@ -77,7 +58,7 @@ func (commandTranslator *CommandTranslator) Translate(data string) interface{} {
 	setGL := commandTranslator.setGLRegexp.FindStringSubmatch(data)
 
 	if len(setGL) > 6 {
-		gl := model.GL{}
+		gl := GL{}
 		gl.Bus, _ = strconv.Atoi(setGL[1])
 		gl.Address, _ = strconv.Atoi(setGL[2])
 		gl.Drivemode, _ = strconv.Atoi(setGL[3])
@@ -96,7 +77,7 @@ func (commandTranslator *CommandTranslator) Translate(data string) interface{} {
 	termGL := commandTranslator.termGLRegexp.FindStringSubmatch(data)
 
 	if len(termGL) == 3 {
-		gl := model.GL{}
+		gl := GL{}
 		gl.Bus, _ = strconv.Atoi(termGL[1])
 		gl.Address, _ = strconv.Atoi(termGL[2])
 		return TermGLCommand{gl}
