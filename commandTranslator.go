@@ -46,7 +46,7 @@ func NewCommandTranslator() *CommandTranslator {
 func (commandTranslator *CommandTranslator) Translate(data string) interface{} {
 	initGL := commandTranslator.initGLRegexp.FindStringSubmatch(data)
 
-	if initGL != nil && len(initGL) > 3 {
+	if len(initGL) > 3 {
 		gl := model.GL{}
 		gl.Name = fmt.Sprintf("GL-%s-%s", initGL[1], initGL[2])
 		gl.Bus, _ = strconv.Atoi(initGL[1])
@@ -67,7 +67,7 @@ func (commandTranslator *CommandTranslator) Translate(data string) interface{} {
 
 	getGL := commandTranslator.getGLRegexp.FindStringSubmatch(data)
 
-	if getGL != nil && len(getGL) == 3 {
+	if len(getGL) == 3 {
 		gl := model.GL{}
 		gl.Bus, _ = strconv.Atoi(getGL[1])
 		gl.Address, _ = strconv.Atoi(getGL[2])
@@ -76,7 +76,7 @@ func (commandTranslator *CommandTranslator) Translate(data string) interface{} {
 
 	setGL := commandTranslator.setGLRegexp.FindStringSubmatch(data)
 
-	if setGL != nil && len(setGL) > 6 {
+	if len(setGL) > 6 {
 		gl := model.GL{}
 		gl.Bus, _ = strconv.Atoi(setGL[1])
 		gl.Address, _ = strconv.Atoi(setGL[2])
@@ -95,7 +95,7 @@ func (commandTranslator *CommandTranslator) Translate(data string) interface{} {
 
 	termGL := commandTranslator.termGLRegexp.FindStringSubmatch(data)
 
-	if termGL != nil && len(termGL) == 3 {
+	if len(termGL) == 3 {
 		gl := model.GL{}
 		gl.Bus, _ = strconv.Atoi(termGL[1])
 		gl.Address, _ = strconv.Atoi(termGL[2])

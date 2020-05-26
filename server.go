@@ -8,9 +8,18 @@ import (
 	"time"
 )
 
+type InfoType int
+
+const (
+	Get = iota + 100
+	Init
+	Term
+)
+
 type GLInfo struct {
-	bus     int
-	address int
+	infoType InfoType
+	bus      int
+	address  int
 }
 
 type SubscribeInfo struct {
@@ -32,7 +41,7 @@ func runTcpServer(port int) {
 	defer serverSocket.Close()
 
 	subscriptionChannel := make(chan interface{})
-	//	infoChannel := make(chan interface{})
+	commandChannel := make(chan interface{})
 
 	go handleRegisterListener(subscriptionChannel)
 
@@ -43,7 +52,7 @@ func runTcpServer(port int) {
 		if err != nil {
 			log.Fatalf("Error accepting incoming socket connection (%s)", err.Error())
 		}
-		NewTcpConnector(connection, subscriptionChannel).Start()
+		NewTcpConnector(connection, subscriptionChannel, commandChannel).Start()
 	}
 }
 
@@ -66,7 +75,7 @@ func broadcast() {
 		time.Sleep(duration)
 		subscriptions.Range(func(key, value interface{}) bool {
 			subscriptor := value.(chan interface{})
-			subscriptor <- "INFO 1 2 3 4"
+			subscriptor <- GLInfo{Init, 1, 123}
 			return true
 		})
 	}
