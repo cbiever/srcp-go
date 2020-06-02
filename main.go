@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	. "srcpd-go/configuration"
 )
 
 func main() {
@@ -27,17 +28,5 @@ func main() {
 	var configuration Configuration
 	xml.Unmarshal(configurationXml, &configuration)
 
-	var server *Server
-	for _, c := range configuration.Bus {
-		if c.Server != nil {
-			server = c.Server
-		}
-	}
-
-	var port = 4303
-	if server != nil {
-		port = server.TcpPort
-	}
-
-	runTcpServer(port)
+	runServer(configuration)
 }

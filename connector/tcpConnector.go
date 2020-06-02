@@ -33,7 +33,7 @@ type TcpConnector struct {
 	connection            net.Conn
 	sessionID             uint32
 	subscriptionChannel   chan interface{}
-	commandChannel        chan Command
+	commandChannel        chan RSVP
 	replyChannel          chan Reply
 	infoChannel           chan interface{}
 	protocolVersionRegexp *regexp.Regexp
@@ -41,9 +41,11 @@ type TcpConnector struct {
 	connectionStatus      ConnectionStatus
 	connectionMode        ConnectionMode
 	commandTranslator     *CommandTranslator
+	reader                *bufio.Reader
+	writer                *bufio.Writer
 }
 
-func NewTcpConnector(connection net.Conn, subscriptionChannel chan interface{}, commandChannel chan Command) *TcpConnector {
+func NewTcpConnector(connection net.Conn, subscriptionChannel chan interface{}, commandChannel chan RSVP) *TcpConnector {
 	tcpConnector := new(TcpConnector)
 	tcpConnector.connection = connection
 	tcpConnector.subscriptionChannel = subscriptionChannel
@@ -68,11 +70,11 @@ func (tcpConnector *TcpConnector) handleConnection() {
 		tcpConnector.connection.Close()
 	}()
 
-	reader := bufio.NewReader(tcpConnector.connection)
-	writer := bufio.NewWriter(tcpConnector.connection)
+	tcpConnector.reader = bufio.NewReader(tcpConnector.connection)
+	tcpConnector.writer = bufio.NewWriter(tcpConnector.connection)
 
 	for {
-		data, err := reader.ReadString('\n')
+		data, err := tcpConnector.reader.ReadString('\n')
 		if err != nil {
 			if err == io.EOF {
 				if tcpConnector.sessionID > 0 {
@@ -94,11 +96,11 @@ func (tcpConnector *TcpConnector) handleConnection() {
 			protocolVersion := tcpConnector.protocolVersionRegexp.FindStringSubmatch(data)
 			if len(protocolVersion) == 2 {
 				if protocolVersion[1] == "0.8.4" {
-					if tcpConnector.sendReply(writer, "201 OK PROTOCOL SRCP") != nil {
+					if tcpConnector.sendReply("201 OK PROTOCOL SRCP") != nil {
 						return
 					}
 				} else {
-					if tcpConnector.sendReply(writer, "400 ERROR unsupported protocol") != nil {
+					if tcpConnector.sendReply("400 ERROR unsupported protocol") != nil {
 						return
 					}
 				}
@@ -110,16 +112,16 @@ func (tcpConnector *TcpConnector) handleConnection() {
 				switch connectionMode[1] {
 				case "COMMAND":
 					tcpConnector.connectionMode = Command_
-					if tcpConnector.sendReply(writer, "202 OK CONNECTIONMODE") != nil {
+					if tcpConnector.sendReply("202 OK CONNECTIONMODE") != nil {
 						return
 					}
 				case "INFO":
 					tcpConnector.connectionMode = Info
-					if tcpConnector.sendReply(writer, "202 OK CONNECTIONMODE") != nil {
+					if tcpConnector.sendReply("202 OK CONNECTIONMODE") != nil {
 						return
 					}
 				default:
-					if tcpConnector.sendReply(writer, "401 ERROR unsupported connection mode") != nil {
+					if tcpConnector.sendReply("401 ERROR unsupported connection mode") != nil {
 						return
 					}
 				}
@@ -127,7 +129,7 @@ func (tcpConnector *TcpConnector) handleConnection() {
 			}
 
 			if "GO" == data {
-				if tcpConnector.sendReply(writer, fmt.Sprintf("200 OK GO %d", sessionID)) != nil {
+				if tcpConnector.sendReply(fmt.Sprintf("200 OK GO %d", sessionID)) != nil {
 					return
 				}
 				tcpConnector.sessionID = atomic.AddUint32(&sessionID, 1)
@@ -145,14 +147,14 @@ func (tcpConnector *TcpConnector) handleConnection() {
 							case GLInfo:
 								switch info.InfoType {
 								case Get:
-									writer.WriteString(fmt.Sprintf("100 %d %d\n", info.Bus, info.Address))
+									tcpConnector.writer.WriteString(fmt.Sprintf("100 %d %d\n", info.Bus, info.Address))
 								case Init:
-									writer.WriteString(fmt.Sprintf("101 %d %d\n", info.Bus, info.Address))
+									tcpConnector.writer.WriteString(fmt.Sprintf("101 %d %d\n", info.Bus, info.Address))
 								case Term:
-									writer.WriteString(fmt.Sprintf("102 %d %d\n", info.Bus, info.Address))
+									tcpConnector.writer.WriteString(fmt.Sprintf("102 %d %d\n", info.Bus, info.Address))
 								}
 							}
-							writer.Flush()
+							tcpConnector.writer.Flush()
 						}
 					}()
 				}
@@ -160,7 +162,7 @@ func (tcpConnector *TcpConnector) handleConnection() {
 			}
 
 			if !handled {
-				if tcpConnector.sendReply(writer, "410 ERROR unknown command") != nil {
+				if tcpConnector.sendReply("410 ERROR unknown command") != nil {
 					return
 				}
 			}
@@ -168,11 +170,11 @@ func (tcpConnector *TcpConnector) handleConnection() {
 			command := tcpConnector.commandTranslator.Translate(data)
 			switch command.(type) {
 			default:
-				tcpConnector.commandChannel <- Command{command, tcpConnector.replyChannel}
+				tcpConnector.commandChannel <- RSVP{command, tcpConnector.replyChannel}
 				reply := <-tcpConnector.replyChannel
-				tcpConnector.sendReply(writer, reply.Message)
+				tcpConnector.sendCommandReply(reply)
 			case UnrecognizedCommand:
-				if tcpConnector.sendReply(writer, "410 ERROR unknown command") != nil {
+				if tcpConnector.sendReply("410 ERROR unknown command") != nil {
 					return
 				}
 			}
@@ -182,16 +184,24 @@ func (tcpConnector *TcpConnector) handleConnection() {
 	}
 }
 
-func (tcpConnector *TcpConnector) sendReply(writer *bufio.Writer, message string) (error error) {
-	_, err := writer.WriteString(fmt.Sprintf("%.3f %s\n", float64(time.Now().UnixNano())/1e9, message))
+func (tcpConnector *TcpConnector) sendReply(message string) (error error) {
+	_, err := tcpConnector.writer.WriteString(fmt.Sprintf("%.3f %s\n", float64(time.Now().UnixNano())/1e9, message))
 	if err != nil {
 		log.Println("Error writing socket", err)
 	}
 	if err == nil {
-		err = writer.Flush()
+		err = tcpConnector.writer.Flush()
 		if err != nil {
 			log.Println("Error flushing socket", err)
 		}
 	}
 	return err
+}
+
+func (tcpConnector *TcpConnector) sendCommandReply(reply Reply) (error error) {
+	if reply.ErrorCode == 0 {
+		return tcpConnector.sendReply(reply.Message)
+	} else {
+		return tcpConnector.sendReply(fmt.Sprintf("%d %s", reply.ErrorCode, reply.Message))
+	}
 }

@@ -24,7 +24,7 @@ func NewCommandTranslator() *CommandTranslator {
 	return commandTranslator
 }
 
-func (commandTranslator *CommandTranslator) Translate(data string) interface{} {
+func (commandTranslator *CommandTranslator) Translate(data string) Command {
 	initGL := commandTranslator.initGLRegexp.FindStringSubmatch(data)
 
 	if len(initGL) > 3 {

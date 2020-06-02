@@ -4,13 +4,34 @@ import (
 	"fmt"
 	"log"
 	"net"
+	. "srcpd-go/bus"
 	. "srcpd-go/command"
+	"srcpd-go/configuration"
 	. "srcpd-go/connector"
 	"sync"
 	"time"
 )
 
 var subscriptions sync.Map
+var busses []Bus
+
+func runServer(srcpConfiguration configuration.Configuration) {
+	var server *configuration.Server
+	for _, c := range srcpConfiguration.Bus {
+		if c.Server != nil {
+			server = c.Server
+		}
+	}
+
+	var port = 4303
+	if server != nil {
+		port = server.TcpPort
+	}
+
+	busses = ConfigureBusses(srcpConfiguration)
+
+	runTcpServer(port)
+}
 
 func runTcpServer(port int) {
 	serverSocket, err := net.Listen("tcp4", fmt.Sprintf(":%d", port))
@@ -23,7 +44,7 @@ func runTcpServer(port int) {
 
 	go handleRegisterListener(subscriptionChannel)
 
-	commandChannel := make(chan Command)
+	commandChannel := make(chan RSVP)
 
 	go handleCommand(commandChannel)
 
@@ -63,10 +84,14 @@ func broadcast() {
 	}
 }
 
-func handleCommand(commandChannel chan Command) {
+func handleCommand(commandChannel chan RSVP) {
 	for {
-		command := <-commandChannel
-		log.Printf("command: %v", command)
-		command.ReplyChannel <- Reply{"ladida"}
+		rsvp := <-commandChannel
+		bus := busses[rsvp.Command.Bus()]
+		if bus != nil {
+			rsvp.ReplyChannel <- bus.HandleCommand(rsvp.Command)
+		} else {
+			rsvp.ReplyChannel <- Reply{412, "ERROR wrong value"}
+		}
 	}
 }

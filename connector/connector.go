@@ -1,3 +1,3 @@
 package connector
 
-var sessionID uint32 = 1
+var sessionID uint32 = 0
