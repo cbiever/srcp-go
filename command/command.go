@@ -51,8 +51,10 @@ type RSVP struct {
 }
 
 type Reply struct {
-	ErrorCode int
+	InfoType  InfoType
+	Device    interface{}
 	Message   string
+	ErrorCode int
 }
 
 type InfoType int
@@ -61,12 +63,14 @@ const (
 	Get = iota + 100
 	Init
 	Term
+	Error
 )
 
-type GLInfo struct {
+type Info struct {
 	InfoType InfoType
 	Bus      int
 	Address  int
+	Device   interface{}
 }
 
 type SubscribeInfo struct {

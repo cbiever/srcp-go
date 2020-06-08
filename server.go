@@ -4,16 +4,16 @@ import (
 	"fmt"
 	"log"
 	"net"
-	. "srcpd-go/bus"
-	. "srcpd-go/command"
+	"srcpd-go/bus"
+	"srcpd-go/command"
 	"srcpd-go/configuration"
-	. "srcpd-go/connector"
+	"srcpd-go/connector"
+	. "srcpd-go/model"
 	"sync"
-	"time"
 )
 
 var subscriptions sync.Map
-var busses []Bus
+var busses []bus.Bus
 
 func runServer(srcpConfiguration configuration.Configuration) {
 	var server *configuration.Server
@@ -28,7 +28,7 @@ func runServer(srcpConfiguration configuration.Configuration) {
 		port = server.TcpPort
 	}
 
-	busses = ConfigureBusses(srcpConfiguration)
+	busses = bus.ConfigureBusses(srcpConfiguration)
 
 	runTcpServer(port)
 }
@@ -44,54 +44,51 @@ func runTcpServer(port int) {
 
 	go handleRegisterListener(subscriptionChannel)
 
-	commandChannel := make(chan RSVP)
+	commandChannel := make(chan command.RSVP)
 
 	go handleCommand(commandChannel)
-
-	go broadcast()
 
 	for {
 		connection, err := serverSocket.Accept()
 		if err != nil {
 			log.Fatalf("Error accepting incoming socket connection (%s)", err.Error())
 		}
-		NewTcpConnector(connection, subscriptionChannel, commandChannel).Start()
+		connector.NewTcpConnector(connection, subscriptionChannel, commandChannel).Start()
 	}
 }
 
 func handleRegisterListener(subscriptionChannel chan interface{}) {
 	for {
 		switch request := (<-subscriptionChannel).(type) {
-		case SubscribeInfo:
+		case command.SubscribeInfo:
 			subscriptions.Store(request.SessionID, request.InfoChannel)
 			log.Printf("Subscription added for session %d", request.SessionID)
-		case UnsubscribeInfo:
+		case command.UnsubscribeInfo:
 			subscriptions.Delete(request.SessionID)
 			log.Printf("Subscription removed for session %d", request.SessionID)
 		}
 	}
 }
 
-func broadcast() {
-	duration, _ := time.ParseDuration("1s")
-	for {
-		time.Sleep(duration)
-		subscriptions.Range(func(key, value interface{}) bool {
-			subscriptor := value.(chan interface{})
-			subscriptor <- GLInfo{Init, 1, 123}
-			return true
-		})
-	}
-}
-
-func handleCommand(commandChannel chan RSVP) {
+func handleCommand(commandChannel chan command.RSVP) {
 	for {
 		rsvp := <-commandChannel
-		bus := busses[rsvp.Command.Bus()]
-		if bus != nil {
-			rsvp.ReplyChannel <- bus.HandleCommand(rsvp.Command)
+		if 0 <= rsvp.Command.Bus() && rsvp.Command.Bus() < len(busses) {
+			bus := busses[rsvp.Command.Bus()]
+			reply := bus.HandleCommand(rsvp.Command)
+			rsvp.ReplyChannel <- reply
+			switch reply.InfoType {
+			default:
+				subscriptions.Range(func(key, value interface{}) bool {
+					subscriptor := value.(chan interface{})
+					subscriptor <- command.Info{command.Init, 1, 123, GL{}}
+					return true
+				})
+			case command.Error:
+				// Errors are not being broadcast
+			}
 		} else {
-			rsvp.ReplyChannel <- Reply{412, "ERROR wrong value"}
+			rsvp.ReplyChannel <- command.Reply{command.Error, nil, "ERROR wrong value", 412}
 		}
 	}
 }

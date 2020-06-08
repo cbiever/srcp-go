@@ -7,7 +7,7 @@ import (
 	"log"
 	"net"
 	"regexp"
-	. "srcpd-go/command"
+	"srcpd-go/command"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -25,7 +25,7 @@ const (
 type ConnectionMode int
 
 const (
-	Command_ = iota // _ due to conflict with Command type
+	Command = iota
 	Info
 )
 
@@ -33,28 +33,28 @@ type TcpConnector struct {
 	connection            net.Conn
 	sessionID             uint32
 	subscriptionChannel   chan interface{}
-	commandChannel        chan RSVP
-	replyChannel          chan Reply
+	commandChannel        chan command.RSVP
+	replyChannel          chan command.Reply
 	infoChannel           chan interface{}
 	protocolVersionRegexp *regexp.Regexp
 	connectionModeRegexp  *regexp.Regexp
 	connectionStatus      ConnectionStatus
 	connectionMode        ConnectionMode
-	commandTranslator     *CommandTranslator
+	commandTranslator     *command.CommandTranslator
 	reader                *bufio.Reader
 	writer                *bufio.Writer
 }
 
-func NewTcpConnector(connection net.Conn, subscriptionChannel chan interface{}, commandChannel chan RSVP) *TcpConnector {
+func NewTcpConnector(connection net.Conn, subscriptionChannel chan interface{}, commandChannel chan command.RSVP) *TcpConnector {
 	tcpConnector := new(TcpConnector)
 	tcpConnector.connection = connection
 	tcpConnector.subscriptionChannel = subscriptionChannel
 	tcpConnector.commandChannel = commandChannel
-	tcpConnector.replyChannel = make(chan Reply)
+	tcpConnector.replyChannel = make(chan command.Reply)
 	tcpConnector.protocolVersionRegexp = regexp.MustCompile("SET PROTOCOL SRCP (\\d\\.\\d\\.\\d)")
 	tcpConnector.connectionModeRegexp = regexp.MustCompile("SET CONNECTIONMODE SRCP (INFO|COMMAND|.*)")
 	tcpConnector.connectionStatus = Handshake
-	tcpConnector.connectionMode = Command_
+	tcpConnector.connectionMode = Command
 	return tcpConnector
 }
 
@@ -65,7 +65,7 @@ func (tcpConnector *TcpConnector) Start() {
 func (tcpConnector *TcpConnector) handleConnection() {
 	defer func() {
 		if tcpConnector.infoChannel != nil {
-			tcpConnector.subscriptionChannel <- UnsubscribeInfo{tcpConnector.sessionID}
+			tcpConnector.subscriptionChannel <- command.UnsubscribeInfo{tcpConnector.sessionID}
 		}
 		tcpConnector.connection.Close()
 	}()
@@ -111,7 +111,7 @@ func (tcpConnector *TcpConnector) handleConnection() {
 			if len(connectionMode) == 2 {
 				switch connectionMode[1] {
 				case "COMMAND":
-					tcpConnector.connectionMode = Command_
+					tcpConnector.connectionMode = Command
 					if tcpConnector.sendReply("202 OK CONNECTIONMODE") != nil {
 						return
 					}
@@ -129,28 +129,28 @@ func (tcpConnector *TcpConnector) handleConnection() {
 			}
 
 			if "GO" == data {
+				tcpConnector.sessionID = atomic.AddUint32(&sessionID, 1)
 				if tcpConnector.sendReply(fmt.Sprintf("200 OK GO %d", sessionID)) != nil {
 					return
 				}
-				tcpConnector.sessionID = atomic.AddUint32(&sessionID, 1)
 				switch tcpConnector.connectionMode {
-				case Command_:
+				case Command:
 					tcpConnector.connectionStatus = CommandMode
-					tcpConnector.commandTranslator = NewCommandTranslator()
+					tcpConnector.commandTranslator = command.NewCommandTranslator()
 				case Info:
 					tcpConnector.connectionStatus = InformationMode
 					tcpConnector.infoChannel = make(chan interface{})
-					tcpConnector.subscriptionChannel <- SubscribeInfo{tcpConnector.sessionID, tcpConnector.infoChannel}
+					tcpConnector.subscriptionChannel <- command.SubscribeInfo{tcpConnector.sessionID, tcpConnector.infoChannel}
 					go func() {
 						for {
 							switch info := (<-tcpConnector.infoChannel).(type) {
-							case GLInfo:
+							case command.Info:
 								switch info.InfoType {
-								case Get:
+								case command.Get:
 									tcpConnector.writer.WriteString(fmt.Sprintf("100 %d %d\n", info.Bus, info.Address))
-								case Init:
+								case command.Init:
 									tcpConnector.writer.WriteString(fmt.Sprintf("101 %d %d\n", info.Bus, info.Address))
-								case Term:
+								case command.Term:
 									tcpConnector.writer.WriteString(fmt.Sprintf("102 %d %d\n", info.Bus, info.Address))
 								}
 							}
@@ -167,13 +167,13 @@ func (tcpConnector *TcpConnector) handleConnection() {
 				}
 			}
 		case CommandMode:
-			command := tcpConnector.commandTranslator.Translate(data)
-			switch command.(type) {
+			c := tcpConnector.commandTranslator.Translate(data)
+			switch c.(type) {
 			default:
-				tcpConnector.commandChannel <- RSVP{command, tcpConnector.replyChannel}
+				tcpConnector.commandChannel <- command.RSVP{c, tcpConnector.replyChannel}
 				reply := <-tcpConnector.replyChannel
 				tcpConnector.sendCommandReply(reply)
-			case UnrecognizedCommand:
+			case command.UnrecognizedCommand:
 				if tcpConnector.sendReply("410 ERROR unknown command") != nil {
 					return
 				}
@@ -198,7 +198,7 @@ func (tcpConnector *TcpConnector) sendReply(message string) (error error) {
 	return err
 }
 
-func (tcpConnector *TcpConnector) sendCommandReply(reply Reply) (error error) {
+func (tcpConnector *TcpConnector) sendCommandReply(reply command.Reply) (error error) {
 	if reply.ErrorCode == 0 {
 		return tcpConnector.sendReply(reply.Message)
 	} else {
