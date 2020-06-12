@@ -64,18 +64,17 @@ const (
 	Init
 	Term
 	Error
+	OK = 200
 )
 
 type Info struct {
 	InfoType InfoType
-	Bus      int
-	Address  int
 	Device   interface{}
 }
 
 type SubscribeInfo struct {
 	SessionID   uint32
-	InfoChannel chan interface{}
+	InfoChannel chan Info
 }
 
 type UnsubscribeInfo struct {

@@ -3,7 +3,6 @@ package bus
 import (
 	. "srcpd-go/command"
 	"srcpd-go/configuration"
-	. "srcpd-go/model"
 )
 
 type Bus struct {
@@ -45,5 +44,14 @@ func (bus Bus) Init() {
 }
 
 func (bus Bus) HandleCommand(command Command) Reply {
-	return Reply{Get, GL{}, "reply ddl bus", 0}
+	switch c := command.(type) {
+	case InitGLCommand:
+		return Reply{Init, c.GL, "", 0}
+	case GetGLCommand:
+		return Reply{Get, c.GL, "", 0}
+	case TermGLCommand:
+		return Reply{Term, c.GL, "", 0}
+	default:
+		return Reply{Error, nil, "ERROR unknown command", 410}
+	}
 }

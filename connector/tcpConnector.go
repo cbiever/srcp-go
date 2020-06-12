@@ -35,12 +35,13 @@ type TcpConnector struct {
 	subscriptionChannel   chan interface{}
 	commandChannel        chan command.RSVP
 	replyChannel          chan command.Reply
-	infoChannel           chan interface{}
+	infoChannel           chan command.Info
 	protocolVersionRegexp *regexp.Regexp
 	connectionModeRegexp  *regexp.Regexp
 	connectionStatus      ConnectionStatus
 	connectionMode        ConnectionMode
 	commandTranslator     *command.CommandTranslator
+	infoTranslator        *command.InfoTranslator
 	reader                *bufio.Reader
 	writer                *bufio.Writer
 }
@@ -139,25 +140,15 @@ func (tcpConnector *TcpConnector) handleConnection() {
 					tcpConnector.commandTranslator = command.NewCommandTranslator()
 				case Info:
 					tcpConnector.connectionStatus = InformationMode
-					tcpConnector.infoChannel = make(chan interface{})
+					tcpConnector.infoChannel = make(chan command.Info)
 					tcpConnector.subscriptionChannel <- command.SubscribeInfo{tcpConnector.sessionID, tcpConnector.infoChannel}
 					go func() {
 						for {
-							switch info := (<-tcpConnector.infoChannel).(type) {
-							case command.Info:
-								switch info.InfoType {
-								case command.Get:
-									tcpConnector.writer.WriteString(fmt.Sprintf("100 %d %d\n", info.Bus, info.Address))
-								case command.Init:
-									tcpConnector.writer.WriteString(fmt.Sprintf("101 %d %d\n", info.Bus, info.Address))
-								case command.Term:
-									tcpConnector.writer.WriteString(fmt.Sprintf("102 %d %d\n", info.Bus, info.Address))
-								}
-							}
-							tcpConnector.writer.Flush()
+							tcpConnector.sendReply(tcpConnector.infoTranslator.Info2Text(<-tcpConnector.infoChannel))
 						}
 					}()
 				}
+				tcpConnector.infoTranslator = command.NewInfoTranslator()
 				handled = true
 			}
 
@@ -167,7 +158,7 @@ func (tcpConnector *TcpConnector) handleConnection() {
 				}
 			}
 		case CommandMode:
-			c := tcpConnector.commandTranslator.Translate(data)
+			c := tcpConnector.commandTranslator.Text2Command(data)
 			switch c.(type) {
 			default:
 				tcpConnector.commandChannel <- command.RSVP{c, tcpConnector.replyChannel}
@@ -200,7 +191,16 @@ func (tcpConnector *TcpConnector) sendReply(message string) (error error) {
 
 func (tcpConnector *TcpConnector) sendCommandReply(reply command.Reply) (error error) {
 	if reply.ErrorCode == 0 {
-		return tcpConnector.sendReply(reply.Message)
+		switch reply.InfoType {
+		case command.Init:
+			fallthrough
+		case command.Get:
+			fallthrough
+		case command.Term:
+			return tcpConnector.sendReply(tcpConnector.infoTranslator.Info2Text(command.Info{reply.InfoType, reply.Device}))
+		default:
+			return tcpConnector.sendReply(fmt.Sprintf("%d %s", reply.InfoType, reply.Message))
+		}
 	} else {
 		return tcpConnector.sendReply(fmt.Sprintf("%d %s", reply.ErrorCode, reply.Message))
 	}
